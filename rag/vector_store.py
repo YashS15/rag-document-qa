@@ -48,12 +48,11 @@ class VectorStore:
         self.index.add(embeddings)
         self._save()
 
-    def search(self, query_embedding: np.ndarray, k: int = 5) -> list[dict]:
+    def search(self, query_embedding: np.ndarray, k: int = 5, doc_id: str | None = None) -> list[dict]:
         if self.index.ntotal == 0:
             return []
         query_vec = query_embedding.reshape(1, -1)
-        # Fetch more candidates to account for deleted-document filtering
-        n = min(k * 3, self.index.ntotal)
+        n = min(k * 4, self.index.ntotal)
         scores, indices = self.index.search(query_vec, n)
 
         results = []
@@ -62,7 +61,9 @@ class VectorStore:
                 continue
             chunk = self.chunks[idx]
             if chunk["doc_id"] not in self.documents:
-                continue  # chunk belongs to a deleted document
+                continue
+            if doc_id and chunk["doc_id"] != doc_id:
+                continue  # filter to specific document
             results.append({**chunk, "score": float(score)})
             if len(results) >= k:
                 break
