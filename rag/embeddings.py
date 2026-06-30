@@ -1,21 +1,20 @@
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 _model = None
 
 
-def get_model() -> SentenceTransformer:
+def get_model() -> TextEmbedding:
     global _model
     if _model is None:
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        # BAAI/bge-small-en-v1.5: 384-dim, ONNX-based (~100MB RAM vs ~500MB for PyTorch)
+        _model = TextEmbedding("BAAI/bge-small-en-v1.5")
     return _model
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
-    embeddings = get_model().encode(
-        texts, normalize_embeddings=True, show_progress_bar=False
-    )
-    return embeddings.astype(np.float32)
+    embeddings = list(get_model().embed(texts))
+    return np.array(embeddings, dtype=np.float32)
 
 
 def embed_query(query: str) -> np.ndarray:
