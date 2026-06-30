@@ -1,0 +1,11 @@
+uploads/
+vectorstore/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+.env
+*.egg-info/
+dist/
+build/
