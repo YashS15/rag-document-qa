@@ -123,6 +123,9 @@ async function uploadFile(file) {
 
     await loadDocuments();
 
+    // Close sidebar drawer on mobile after upload so user lands on chat
+    if (window.innerWidth <= 640) toggleSidebar();
+
     if (data.summary) {
       summaryText.textContent = data.summary;
       setTimeout(() => summaryBox.classList.remove('hidden'), 400);
@@ -324,6 +327,13 @@ function toggleSources(id) {
 function scrollToBottom() {
   const messages = document.getElementById('messages');
   messages.scrollTop = messages.scrollHeight;
+}
+
+// ── Sidebar toggle (mobile) ───────────────────────────────────────────────────
+
+function toggleSidebar() {
+  document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('active');
 }
 
 // ── New Conversation ──────────────────────────────────────────────────────────
