@@ -4,7 +4,26 @@ import os
 from pathlib import Path
 
 import requests
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+
+import uvicorn
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    HTTPException,
+    Request,
+)
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+
+from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from werkzeug.utils import secure_filename
 
 from rag.document_processor import process_pdf
@@ -15,9 +34,13 @@ from rag.vector_store import VectorStore
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = "uploads"
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+UPLOAD_FOLDER = "uploads"
+MAX_CONTENT_LENGTH = 50 * 1024 * 1024
+
+templates = Jinja2Templates(directory="templates")
 
 Path("uploads").mkdir(exist_ok=True)
 
@@ -32,22 +55,20 @@ except Exception as exc:
 
 store = VectorStore()
 
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail},
+    )
 
-# ── Global JSON error handlers ────────────────────────────────────────────────
-# Flask's default error responses are HTML. Override them so the frontend always
-# receives JSON regardless of which error code the server produces.
-
-@app.errorhandler(413)
-def too_large(_e):
-    return jsonify({"error": "File too large. Maximum size is 50 MB."}), 413
-
-@app.errorhandler(404)
-def not_found(_e):
-    return jsonify({"error": "Not found"}), 404
-
-@app.errorhandler(500)
-def server_error(_e):
-    return jsonify({"error": "Internal server error. Check server logs."}), 500
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc):
+    logger.exception(exc)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"},
+    )
 
 GROQ_MODEL_OPTIONS = [
     {"id": "llama3.1-8b", "name": "Llama 3.1 8B — Fast"},
@@ -55,133 +76,195 @@ GROQ_MODEL_OPTIONS = [
     {"id": "gemma2-9b", "name": "Gemma 2 9B — Google"},
 ]
 
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+    )
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
+@app.get("/documents")
+async def list_documents():
+    return store.list_documents()
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are supported",
+        )
 
+    content = await file.read()
 
-@app.route("/documents", methods=["GET"])
-def list_documents():
-    return jsonify(store.list_documents())
-
-
-@app.route("/upload", methods=["POST"])
-def upload():
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    file = request.files["file"]
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Only PDF files are supported"}), 400
+    if len(content) > MAX_CONTENT_LENGTH:
+        raise HTTPException(
+            status_code=413,
+            detail="File too large. Maximum size is 50 MB.",
+        )
 
     filename = secure_filename(file.filename)
-    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    file.save(filepath)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(content)
 
     try:
-        doc_data = process_pdf(filepath, filename)
-        if not doc_data["chunks"]:
-            return jsonify({"error": "Could not extract text from this PDF"}), 400
-
-        texts = [c["text"] for c in doc_data["chunks"]]
-        embeddings = embed_texts(texts)
-
-        doc_meta = {k: v for k, v in doc_data.items() if k != "chunks"}
-        store.add_document(doc_meta, doc_data["chunks"], embeddings)
-
-        summary = summarize_document(doc_data["chunks"])
-
-        return jsonify({
-            "doc_id": doc_data["doc_id"],
-            "name": filename,
-            "page_count": doc_data["page_count"],
-            "chunk_count": doc_data["chunk_count"],
-            "summary": summary,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        ...
     finally:
         if os.path.exists(filepath):
             os.remove(filepath)
 
+class AskRequest(BaseModel):
+    question: str
+    model: str = "llama3.1-8b"
+    k: int = 5
+    history: list = []
+    doc_id: str | None = None
 
-@app.route("/ask/stream", methods=["POST"])
-def ask_stream():
-    data = request.get_json()
-    if not data or not data.get("question", "").strip():
-        return jsonify({"error": "No question provided"}), 400
+@app.post("/ask/stream")
+async def ask_stream(req: AskRequest):
+    question = req.question.strip()
 
-    question = data["question"].strip()
-    model = data.get("model", "llama3.1-8b")
-    k = int(data.get("k", 5))
-    history = data.get("history", [])
-    doc_id = data.get("doc_id")  # optional: restrict search to one document
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail="No question provided",
+        )
+
+    model = req.model
+    k = req.k
+    history = req.history
+    doc_id = req.doc_id
 
     if not store.documents:
-        return jsonify({"error": "No documents indexed yet. Please upload a PDF first."}), 400
+        raise HTTPException(
+            status_code=400,
+            detail="No documents indexed yet. Please upload a PDF first.",
+        )
 
     query_emb = embed_query(question)
-    relevant_chunks = store.search(query_emb, k=k, doc_id=doc_id or None)
+    relevant_chunks = store.search(
+        query_emb,
+        k=k,
+        doc_id=doc_id,
+    )
 
     if not relevant_chunks:
-        return jsonify({"error": "No relevant content found in the indexed documents."}), 404
+        raise HTTPException(
+            status_code=404,
+            detail="No relevant content found in the indexed documents.",
+        )
 
     sources = [
         {
             "doc_name": c["doc_name"],
             "page": c["page"],
-            "text": c["text"][:300] + "…" if len(c["text"]) > 300 else c["text"],
+            "text": (
+                c["text"][:300] + "…"
+                if len(c["text"]) > 300
+                else c["text"]
+            ),
             "score": round(c["score"], 4),
         }
         for c in relevant_chunks
     ]
 
-    def generate():
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+    async def generate():
+        yield (
+            f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+        )
+
         try:
-            for token in stream_answer(question, relevant_chunks, model, history):
-                yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+            for token in stream_answer(
+                question,
+                relevant_chunks,
+                model,
+                history,
+            ):
+                yield (
+                    f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                )
+
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield (
+                f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            )
+
         yield "data: [DONE]\n\n"
 
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
-
-@app.route("/documents/<doc_id>", methods=["DELETE"])
-def delete_document(doc_id):
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
     if store.delete_document(doc_id):
-        return jsonify({"message": "Document removed"})
-    return jsonify({"error": "Document not found"}), 404
+        return {"message": "Document removed"}
 
+    raise HTTPException(
+        status_code=404,
+        detail="Document not found",
+    )
 
-@app.route("/models", methods=["GET"])
-def list_models():
+@app.get("/models")
+async def list_models():
     if os.environ.get("GROQ_API_KEY"):
-        return jsonify({"models": GROQ_MODEL_OPTIONS, "provider": "groq"})
-    try:
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
-        resp.raise_for_status()
-        ollama_models = [
-            {"id": m["name"], "name": m["name"]}
-            for m in resp.json().get("models", [])
-        ]
-        return jsonify({"models": ollama_models or [{"id": "llama3.2", "name": "llama3.2"}], "provider": "ollama"})
-    except Exception:
-        return jsonify({"models": [{"id": "llama3.2", "name": "llama3.2"}], "provider": "ollama"})
+        return {
+            "models": GROQ_MODEL_OPTIONS,
+            "provider": "groq",
+        }
 
+    try:
+        resp = requests.get(
+            "http://localhost:11434/api/tags",
+            timeout=5,
+        )
+        resp.raise_for_status()
+
+        ollama_models = [
+            {
+                "id": model["name"],
+                "name": model["name"],
+            }
+            for model in resp.json().get("models", [])
+        ]
+
+        return {
+            "models": ollama_models
+            or [
+                {
+                    "id": "llama3.2",
+                    "name": "llama3.2",
+                }
+            ],
+            "provider": "ollama",
+        }
+
+    except Exception:
+        return {
+            "models": [
+                {
+                    "id": "llama3.2",
+                    "name": "llama3.2",
+                }
+            ],
+            "provider": "ollama",
+        }
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug = not os.environ.get("GROQ_API_KEY")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )
