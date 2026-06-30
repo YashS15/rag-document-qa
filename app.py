@@ -108,16 +108,25 @@ def delete_document(doc_id):
     return jsonify({"error": "Document not found"}), 404
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
 @app.route("/models", methods=["GET"])
 def list_models():
+    if os.environ.get("GROQ_API_KEY"):
+        return jsonify({"models": ["llama3.2", "mistral", "llama3.2:70b"], "provider": "groq"})
     try:
         resp = requests.get("http://localhost:11434/api/tags", timeout=5)
         resp.raise_for_status()
         models = [m["name"] for m in resp.json().get("models", [])]
-        return jsonify({"models": models or ["llama3.2", "mistral", "llama2"]})
+        return jsonify({"models": models or ["llama3.2", "mistral", "llama2"], "provider": "ollama"})
     except Exception:
-        return jsonify({"models": ["llama3.2", "mistral", "llama2"]})
+        return jsonify({"models": ["llama3.2", "mistral", "llama2"], "provider": "ollama"})
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    debug = not os.environ.get("GROQ_API_KEY")  # disable debug in production
+    app.run(host="0.0.0.0", port=port, debug=debug)
