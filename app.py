@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -7,9 +8,12 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 from werkzeug.utils import secure_filename
 
 from rag.document_processor import process_pdf
-from rag.embeddings import embed_query, embed_texts
+from rag.embeddings import embed_query, embed_texts, get_model
 from rag.llm import stream_answer, summarize_document
 from rag.vector_store import VectorStore
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = "uploads"
@@ -17,7 +21,33 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 Path("uploads").mkdir(exist_ok=True)
 
+# Pre-load the embedding model at startup so the first upload doesn't trigger
+# a slow Hugging Face download mid-request (which can cause a gunicorn timeout)
+try:
+    logger.info("Loading embedding model...")
+    get_model()
+    logger.info("Embedding model ready.")
+except Exception as exc:
+    logger.warning("Could not pre-load embedding model: %s", exc)
+
 store = VectorStore()
+
+
+# ── Global JSON error handlers ────────────────────────────────────────────────
+# Flask's default error responses are HTML. Override them so the frontend always
+# receives JSON regardless of which error code the server produces.
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify({"error": "File too large. Maximum size is 50 MB."}), 413
+
+@app.errorhandler(404)
+def not_found(_e):
+    return jsonify({"error": "Not found"}), 404
+
+@app.errorhandler(500)
+def server_error(_e):
+    return jsonify({"error": "Internal server error. Check server logs."}), 500
 
 GROQ_MODEL_OPTIONS = [
     {"id": "llama3.1-8b", "name": "Llama 3.1 8B — Fast"},

@@ -114,8 +114,13 @@ async function uploadFile(file) {
 
   try {
     const resp = await fetch('/upload', { method: 'POST', body: formData });
-    const data = await resp.json();
     clearInterval(ticker);
+    let data;
+    try {
+      data = await resp.json();
+    } catch {
+      throw new Error(`Server error (HTTP ${resp.status}) — check Render logs`);
+    }
     if (!resp.ok) throw new Error(data.error || 'Upload failed');
 
     fill.style.width = '100%';
