@@ -18,10 +18,11 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg);
   height: 100vh;
+  height: 100dvh; /* adjusts when mobile keyboard opens / browser chrome hides */
   overflow: hidden;
 }
 
-.app { display: flex; height: 100vh; }
+.app { display: flex; height: 100vh; height: 100dvh; }
 
 /* ── Sidebar ── */
 .sidebar {
@@ -365,6 +366,8 @@ body {
 /* Input */
 .chat-input-area {
   padding: 14px 20px;
+  /* Safe area for iPhone home bar; also lifts bar off the very bottom edge */
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   background: var(--card);
   display: flex;
@@ -411,3 +414,70 @@ body {
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Mobile ─────────────────────────────────────────────────────────────── */
+/* Hamburger button — hidden on desktop, shown on mobile */
+.menu-btn {
+  display: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--muted);
+  align-items: center;
+}
+.menu-btn svg { width: 18px; height: 18px; stroke: currentColor; display: block; }
+
+/* Overlay behind open sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 99;
+}
+.sidebar-overlay.active { display: block; }
+
+@media (max-width: 640px) {
+  /* Sidebar slides in from left as a drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: -320px;
+    height: 100%;
+    height: 100dvh;
+    z-index: 100;
+    transition: left .25s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,.3);
+  }
+  .sidebar.open { left: 0; }
+
+  /* Chat area fills the full screen */
+  .chat-area { width: 100%; }
+
+  /* Show hamburger */
+  .menu-btn { display: flex; }
+
+  /* Shrink header text on small screens */
+  .chat-header h3 { font-size: .9rem; }
+
+  /* Hide text labels on Export / New Chat, keep icons */
+  .header-btn span { display: none; }
+  .header-btn { padding: 6px 8px; }
+
+  /* Input: slightly more bottom padding so it clears the browser nav bar */
+  .chat-input-area {
+    padding: 10px 12px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  /* Slightly smaller textarea on mobile */
+  #questionInput { font-size: .85rem; padding: 10px 12px; }
+
+  /* Messages padding tighter on mobile */
+  .messages { padding: 16px 12px; }
+
+  /* Make welcome message fit small screens */
+  .welcome-message { padding: 0 8px; }
+}

@@ -123,6 +123,9 @@ async function uploadFile(file) {
 
     await loadDocuments();
 
+    // Close sidebar drawer on mobile after upload
+    if (window.innerWidth <= 640) toggleSidebar();
+
     if (data.summary) {
       summaryText.textContent = data.summary;
       setTimeout(() => summaryBox.classList.remove('hidden'), 400);
@@ -324,6 +327,15 @@ function toggleSources(id) {
 function scrollToBottom() {
   const messages = document.getElementById('messages');
   messages.scrollTop = messages.scrollHeight;
+}
+
+// ── Sidebar toggle (mobile) ───────────────────────────────────────────────────
+
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  sidebar.classList.toggle('open');
+  overlay.classList.toggle('active');
 }
 
 // ── New Conversation ──────────────────────────────────────────────────────────
