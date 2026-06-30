@@ -93,53 +93,28 @@ async def list_documents():
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported",
         )
 
+    content = await file.read()
+
+    if len(content) > MAX_CONTENT_LENGTH:
+        raise HTTPException(
+            status_code=413,
+            detail="File too large. Maximum size is 50 MB.",
+        )
+
     filename = secure_filename(file.filename)
     filepath = os.path.join(UPLOAD_FOLDER, filename)
 
     with open(filepath, "wb") as f:
-        f.write(await file.read())
+        f.write(content)
 
     try:
-        doc_data = process_pdf(filepath, filename)
-
-        if not doc_data["chunks"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract text from this PDF",
-            )
-
-        texts = [c["text"] for c in doc_data["chunks"]]
-        embeddings = embed_texts(texts)
-
-        doc_meta = {
-            k: v
-            for k, v in doc_data.items()
-            if k != "chunks"
-        }
-
-        store.add_document(
-            doc_meta,
-            doc_data["chunks"],
-            embeddings,
-        )
-
-        summary = summarize_document(doc_data["chunks"])
-
-        return {
-            "doc_id": doc_data["doc_id"],
-            "name": filename,
-            "page_count": doc_data["page_count"],
-            "chunk_count": doc_data["chunk_count"],
-            "summary": summary,
-        }
-
+        ...
     finally:
         if os.path.exists(filepath):
             os.remove(filepath)
